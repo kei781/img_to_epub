@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+.superpowers/
+_epub_output/
+_ocr_cache/
