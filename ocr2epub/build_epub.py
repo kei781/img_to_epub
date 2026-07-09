@@ -36,4 +36,8 @@ def build_epub(title, page_paragraphs, out_path):
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     book.spine = ["nav"] + chapters
-    epub.write_epub(out_path, book)
+    # atomic write: a crash mid-write must not leave a truncated .epub that the
+    # resume check (os.path.exists) would then accept as complete.
+    tmp = out_path + ".part"
+    epub.write_epub(tmp, book)
+    os.replace(tmp, out_path)

@@ -50,11 +50,20 @@ class OcrEngine:
             return page.text
         cp = self._cache_path(cache_key)
         if os.path.exists(cp):
-            with open(cp, encoding="utf-8") as f:
-                return json.load(f)["text"]
+            try:
+                with open(cp, encoding="utf-8") as f:
+                    return json.load(f)["text"]
+            except (json.JSONDecodeError, KeyError, ValueError, OSError):
+                # truncated/empty cache from an interrupted write -> re-OCR
+                try:
+                    os.remove(cp)
+                except OSError:
+                    pass
         results = self.reader.readtext(page.image_path, detail=1, paragraph=False)
         lines = sort_reading_order(results)
         text = "\n".join(lines)
-        with open(cp, "w", encoding="utf-8") as f:
+        tmp = cp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"text": text}, f, ensure_ascii=False)
+        os.replace(tmp, cp)  # atomic: cp is never left half-written
         return text

@@ -1,5 +1,6 @@
 import os
 import zipfile
+from collections import defaultdict
 from dataclasses import dataclass
 
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
@@ -19,6 +20,11 @@ def _target(root, folder_rel, title):
     return os.path.join(root, "_epub_output", folder_rel, title + ".epub")
 
 
+def _is_zip_junk(name):
+    base = name.rsplit("/", 1)[-1]
+    return "__MACOSX" in name.split("/") or base.startswith("._")
+
+
 def existing_epub_titles(root):
     out = set()
     for dirpath, dirs, files in os.walk(root):
@@ -32,9 +38,12 @@ def existing_epub_titles(root):
 def _zip_kind(path):
     try:
         with zipfile.ZipFile(path) as z:
-            names = [n for n in z.namelist() if not n.endswith("/")]
+            names = [
+                n for n in z.namelist()
+                if not n.endswith("/") and not _is_zip_junk(n)
+            ]
     except Exception:
-        return None, []
+        return "error", []  # corrupt/encrypted/unreadable -> surfaced as a skip
     pdfs = [n for n in names if n.lower().endswith(".pdf")]
     imgs = [n for n in names if os.path.splitext(n)[1].lower() in IMG_EXT]
     if pdfs:
@@ -48,12 +57,13 @@ def discover(root):
     existing = existing_epub_titles(root)
     vols = []
     for dirpath, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        # deterministic traversal so --limit selects a reproducible subset
+        dirs[:] = sorted(d for d in dirs if d not in IGNORE_DIRS)
         rel = os.path.relpath(dirpath, root)
         standalone_pdf_titles = {
             os.path.splitext(f)[0] for f in files if f.lower().endswith(".pdf")
         }
-        for f in files:
+        for f in sorted(files):
             ext = os.path.splitext(f)[1].lower()
             full = os.path.join(dirpath, f)
             if ext == ".pdf":
@@ -62,7 +72,12 @@ def discover(root):
                 vols.append(Volume(title, [full], "pdf", _target(root, rel, title), skip))
             elif ext == ".zip":
                 kind, inner = _zip_kind(full)
-                if kind == "image-zip":
+                if kind == "error":
+                    title = os.path.splitext(f)[0]
+                    vols.append(
+                        Volume(title, [full], "zip", _target(root, rel, title), "unreadable-zip")
+                    )
+                elif kind == "image-zip":
                     title = os.path.splitext(f)[0]
                     skip = "epub-exists" if (rel, title) in existing else None
                     vols.append(
@@ -89,4 +104,22 @@ def discover(root):
                 title = os.path.splitext(f)[0]
                 skip = "epub-exists" if (rel, title) in existing else None
                 vols.append(Volume(title, [full], "rar", _target(root, rel, title), skip))
+
+    _disambiguate_targets(vols)
     return vols
+
+
+def _disambiguate_targets(vols):
+    """Two active volumes with the same base title in one folder would resolve
+    to the same target .epub, and the second would be silently skipped as
+    already-existing. Give colliding volumes distinct output paths instead."""
+    groups = defaultdict(list)
+    for v in vols:
+        if v.skip_reason is None:
+            groups[v.target_epub].append(v)
+    for group in groups.values():
+        if len(group) > 1:
+            group.sort(key=lambda v: (v.source_type, str(v.source_paths)))
+            for i, v in enumerate(group[1:], start=2):
+                base, ext = os.path.splitext(v.target_epub)
+                v.target_epub = f"{base} ({i}){ext}"

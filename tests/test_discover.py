@@ -47,3 +47,29 @@ def test_txt_only_folder_yields_nothing(tmp_path):
     _touch(os.path.join(root, "기타", "novel.txt"))
     active = [v for v in discover(root) if v.skip_reason is None]
     assert active == []
+
+
+def test_colliding_targets_are_disambiguated(tmp_path):
+    # a standalone book.pdf and an image book.zip both want <root>/book.epub
+    root = str(tmp_path)
+    _touch(os.path.join(root, "D", "book.pdf"))
+    zp = os.path.join(root, "D", "book.zip")
+    os.makedirs(os.path.dirname(zp), exist_ok=True)
+    with zipfile.ZipFile(zp, "w") as z:
+        z.writestr("p1.jpg", b"x")
+    active = [v for v in discover(root) if v.skip_reason is None]
+    targets = [v.target_epub for v in active]
+    assert len(active) == 2
+    assert len(set(targets)) == 2  # no silent collision
+
+
+def test_unreadable_zip_is_marked_skip(tmp_path):
+    root = str(tmp_path)
+    bad = os.path.join(root, "E", "broken.zip")
+    os.makedirs(os.path.dirname(bad), exist_ok=True)
+    with open(bad, "wb") as f:
+        f.write(b"not a real zip")
+    vols = discover(root)
+    assert any(v.title == "broken" and v.skip_reason == "unreadable-zip" for v in vols)
+    active = [v for v in vols if v.skip_reason is None]
+    assert active == []  # not silently dropped, but not processed either

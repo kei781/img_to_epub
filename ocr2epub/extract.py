@@ -17,6 +17,24 @@ def natural_key(name):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
 
 
+def _decode_zip_name(info):
+    """zipfile decodes non-UTF-8 entry names as cp437; Korean archives are
+    usually cp949. Recover the real name (used for sorting + output ext) when
+    the UTF-8 general-purpose flag bit is not set."""
+    name = info.filename
+    if not (info.flag_bits & 0x800):
+        try:
+            name = name.encode("cp437").decode("cp949")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    return name
+
+
+def _is_zip_junk(name):
+    base = name.rsplit("/", 1)[-1]
+    return "__MACOSX" in name.split("/") or base.startswith("._")
+
+
 @dataclass
 class Page:
     index: int
@@ -24,11 +42,14 @@ class Page:
     text: str | None
 
 
-def _render_pdf(pdf_path, workdir, dpi):
+def _render_pdf(pdf_path, workdir, dpi, maxpages=None):
     pages = []
     doc = fitz.open(pdf_path)
     try:
-        for i in range(len(doc)):
+        n = len(doc)
+        if maxpages is not None:
+            n = min(n, maxpages)
+        for i in range(n):
             pg = doc[i]
             txt = pg.get_text("text").strip()
             if len(txt) >= 20:  # 유의미한 텍스트 레이어 존재
@@ -42,53 +63,63 @@ def _render_pdf(pdf_path, workdir, dpi):
     return pages
 
 
-def _pdf_from_zip(spec, workdir, dpi):
+def _pdf_from_zip(spec, workdir, dpi, maxpages=None):
     zpath, inner = spec.split("::", 1)
     tmp = os.path.join(workdir, "_inner.pdf")
     with zipfile.ZipFile(zpath) as z, open(tmp, "wb") as f:
         f.write(z.read(inner))
-    return _render_pdf(tmp, workdir, dpi)
+    return _render_pdf(tmp, workdir, dpi, maxpages)
 
 
-def _images_from_zip(zpath, workdir):
+def _images_from_zip(zpath, workdir, maxpages=None):
     with zipfile.ZipFile(zpath) as z:
-        names = [
-            n
-            for n in z.namelist()
-            if os.path.splitext(n)[1].lower() in IMG_EXT and not n.endswith("/")
-        ]
-        names.sort(key=natural_key)
+        entries = []
+        for info in z.infolist():
+            if info.is_dir():
+                continue
+            name = _decode_zip_name(info)
+            if _is_zip_junk(name):
+                continue
+            if os.path.splitext(name)[1].lower() not in IMG_EXT:
+                continue
+            entries.append((name, info))
+        entries.sort(key=lambda e: natural_key(e[0]))
+        if maxpages is not None:
+            entries = entries[:maxpages]
         pages = []
-        for i, n in enumerate(names):
-            out = os.path.join(workdir, f"p{i:05d}{os.path.splitext(n)[1].lower()}")
+        for i, (name, info) in enumerate(entries):
+            ext = os.path.splitext(name)[1].lower()
+            out = os.path.join(workdir, f"p{i:05d}{ext}")
             with open(out, "wb") as f:
-                f.write(z.read(n))
+                f.write(z.read(info))  # read by ZipInfo so the raw key still matches
             pages.append(Page(i, out, None))
     return pages
 
 
-def _images_from_rar(rpath, workdir):
+def _images_from_rar(rpath, workdir, maxpages=None):
     ex = os.path.join(workdir, "rar")
     os.makedirs(ex, exist_ok=True)
     subprocess.run([BZ, "x", "-o:" + ex, "-y", rpath], check=True)
     found = []
     for dp, _, fs in os.walk(ex):
         for f in fs:
-            if os.path.splitext(f)[1].lower() in IMG_EXT:
+            if os.path.splitext(f)[1].lower() in IMG_EXT and not _is_zip_junk(f):
                 found.append(os.path.join(dp, f))
     found.sort(key=natural_key)
+    if maxpages is not None:
+        found = found[:maxpages]
     return [Page(i, p, None) for i, p in enumerate(found)]
 
 
-def extract_pages(vol, workdir, dpi=350):
+def extract_pages(vol, workdir, dpi=350, maxpages=None):
     os.makedirs(workdir, exist_ok=True)
     st = vol.source_type
     if st == "pdf":
-        return _render_pdf(vol.source_paths[0], workdir, dpi)
+        return _render_pdf(vol.source_paths[0], workdir, dpi, maxpages)
     if st == "pdf-zip":
-        return _pdf_from_zip(vol.source_paths[0], workdir, dpi)
+        return _pdf_from_zip(vol.source_paths[0], workdir, dpi, maxpages)
     if st == "image-zip":
-        return _images_from_zip(vol.source_paths[0], workdir)
+        return _images_from_zip(vol.source_paths[0], workdir, maxpages)
     if st == "rar":
-        return _images_from_rar(vol.source_paths[0], workdir)
+        return _images_from_rar(vol.source_paths[0], workdir, maxpages)
     raise ValueError(f"unknown source_type {st}")
