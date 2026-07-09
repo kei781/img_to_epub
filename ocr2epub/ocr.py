@@ -39,7 +39,9 @@ class OcrEngine:
 
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
-        self.reader = easyocr.Reader(["ko", "en"], gpu=True)
+        # verbose=False silences per-page "Progress: |...|% Complete" spam that
+        # would otherwise bloat the batch log to GBs over ~20k pages.
+        self.reader = easyocr.Reader(["ko", "en"], gpu=True, verbose=False)
 
     def _cache_path(self, cache_key):
         h = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()
