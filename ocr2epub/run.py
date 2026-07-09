@@ -52,8 +52,13 @@ def main():
     ap.add_argument("--dpi", type=int, default=350)
     ap.add_argument("--maxpages", type=int, default=None,
                     help="OCR only the first N pages per volume (pilot/sampling)")
+    ap.add_argument("--types", default=None,
+                    help="comma-separated source_types to include, e.g. 'pdf,pdf-zip'")
     a = ap.parse_args()
     vols = [v for v in discover(a.root) if v.skip_reason is None]
+    if a.types:
+        allowed = {t.strip() for t in a.types.split(",")}
+        vols = [v for v in vols if v.source_type in allowed]
     if a.only:
         vols = [v for v in vols if a.only in v.title]
     if a.limit is not None:
