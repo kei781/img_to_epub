@@ -4,6 +4,28 @@ import re
 _SENT_END = ("。", ".", "!", "?", "！", "？", "”", "’", "」", "』", ")", '"', "'")
 
 
+def _hangul_count(s):
+    return sum(1 for c in s if "가" <= c <= "힣")
+
+
+def is_body_text(lines, min_total=80, min_long_lines=2, long_line_hangul=12):
+    """True if a page's OCR lines look like real prose body text, not a
+    cover/illustration page that OCR'd into scattered garbage tokens.
+
+    Judged by Hangul density + presence of several real prose lines. Illustration
+    pages yield few, short tokens (max line ~5 Hangul) with little total text;
+    body pages yield many long prose lines (300+ Hangul). EasyOCR confidence is
+    deliberately NOT used — measured body and illustration pages score alike."""
+    total = 0
+    long_lines = 0
+    for ln in lines:
+        h = _hangul_count(ln)
+        total += h
+        if h >= long_line_hangul:
+            long_lines += 1
+    return total >= min_total and long_lines >= min_long_lines
+
+
 def strip_furniture(lines):
     out = []
     for ln in lines:

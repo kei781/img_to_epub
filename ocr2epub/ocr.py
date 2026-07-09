@@ -2,6 +2,9 @@ import os
 import json
 import hashlib
 
+import numpy as np
+from PIL import Image
+
 
 def _ytop(bbox):
     return min(p[1] for p in bbox)
@@ -61,7 +64,11 @@ class OcrEngine:
                     os.remove(cp)
                 except OSError:
                     pass
-        results = self.reader.readtext(page.image_path, detail=1, paragraph=False)
+        # Load via PIL, not by path: cv2.imread (EasyOCR's default) returns None
+        # for non-ASCII paths on Windows (e.g. Korean folder names from rar),
+        # which crashed the rar volume. PIL handles Unicode paths + more formats.
+        img = np.array(Image.open(page.image_path).convert("RGB"))
+        results = self.reader.readtext(img, detail=1, paragraph=False)
         lines = sort_reading_order(results)
         text = "\n".join(lines)
         tmp = cp + ".tmp"

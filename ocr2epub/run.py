@@ -7,7 +7,7 @@ import traceback
 from .discover import discover
 from .extract import extract_pages
 from .ocr import OcrEngine
-from .postprocess import merge_paragraphs
+from .postprocess import merge_paragraphs, is_body_text
 from .build_epub import build_epub
 
 
@@ -23,12 +23,19 @@ def process_volume(vol, engine, root, dpi=350, maxpages=None):
             # done forever). Raise so main() counts it FAIL and it is retried.
             raise RuntimeError(f"no pages extracted for {vol.title}")
         page_paras = []
+        dropped = 0
         for pg in pages:
             key = f"{vol.title}|{pg.index}|{vol.source_paths}|dpi{dpi}"
             text = engine.page_text(pg, key)
-            page_paras.append(merge_paragraphs(text.split("\n")))
+            raw_lines = text.split("\n")
+            if is_body_text(raw_lines):
+                page_paras.append(merge_paragraphs(raw_lines))
+            else:
+                dropped += 1  # cover/illustration page -> keep only real body text
+        if not page_paras:
+            raise RuntimeError(f"no body pages for {vol.title}")
         build_epub(vol.title, page_paras, vol.target_epub)
-        print(f"  done: {vol.target_epub} ({len(pages)} pages)")
+        print(f"  done: {vol.target_epub} ({len(page_paras)} body pages, {dropped} non-body dropped)")
         return vol.target_epub
     finally:
         shutil.rmtree(work, ignore_errors=True)
