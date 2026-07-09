@@ -3,3 +3,4 @@ pymupdf
 ebooklib
 pillow
 numpy
+pytest
