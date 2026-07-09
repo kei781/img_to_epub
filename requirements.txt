@@ -1,0 +1,5 @@
+easyocr
+pymupdf
+ebooklib
+pillow
+numpy
