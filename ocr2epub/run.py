@@ -22,11 +22,14 @@ def process_volume(vol, engine, root, dpi=350, maxpages=None):
             # 0 pages -> do NOT write a placeholder epub (it would be treated as
             # done forever). Raise so main() counts it FAIL and it is retried.
             raise RuntimeError(f"no pages extracted for {vol.title}")
+        # low-quality scans (zip/rar) get levels cleanup; PDF renders are already
+        # crisp and are left untouched. "|pp2" tag keeps the two caches distinct.
+        pp = vol.source_type in ("image-zip", "rar")
         page_paras = []
         dropped = 0
         for pg in pages:
-            key = f"{vol.title}|{pg.index}|{vol.source_paths}|dpi{dpi}"
-            text = engine.page_text(pg, key)
+            key = f"{vol.title}|{pg.index}|{vol.source_paths}|dpi{dpi}" + ("|pp2" if pp else "")
+            text = engine.page_text(pg, key, preprocess=pp)
             raw_lines = text.split("\n")
             if is_body_text(raw_lines):
                 page_paras.append(merge_paragraphs(raw_lines))
