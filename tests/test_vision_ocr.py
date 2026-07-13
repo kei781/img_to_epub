@@ -158,3 +158,31 @@ def test_make_engine_vision_empty_key_exits(tmp_path):
     (tmp_path / ".vision_key").write_text("   \n", encoding="utf-8")  # whitespace-only
     with pytest.raises(SystemExit):
         make_engine("vision", str(tmp_path), str(tmp_path / ".vision_key"))
+
+
+def test_module_disables_pil_bomb_guard():
+    # 2-page-spread scans render to ~100 MP at 350 dpi; PIL's default guard
+    # (~89 MP) would raise DecompressionBombError when _fit_payload opens them.
+    import ocr2epub.vision_ocr as vo
+    assert vo.Image.MAX_IMAGE_PIXELS is None
+
+
+def test_fit_payload_passthrough_when_small(tmp_path):
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    data = b"x" * 1000
+    assert eng._fit_payload(data) is data   # under the cap -> byte-identical, no re-encode
+
+
+def test_fit_payload_downscales_oversized_below_cap(tmp_path, monkeypatch):
+    import numpy as np
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    monkeypatch.setattr(eng, "_MAX_RAW_BYTES", 3000)   # tiny cap forces a downscale
+    noise = np.random.RandomState(0).randint(0, 256, (400, 400, 3), dtype=np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(noise, "RGB").save(buf, "PNG")
+    big = buf.getvalue()
+    assert len(big) > 3000                              # precondition: over the cap
+    out = eng._fit_payload(big)
+    assert len(out) <= 3000                             # fits the payload budget
+    im = Image.open(io.BytesIO(out)); im.load()         # still a valid, smaller image
+    assert im.width < 400 and im.height < 400

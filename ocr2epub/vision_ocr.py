@@ -12,6 +12,11 @@ from PIL import Image
 
 from .ocr import _preprocess_image
 
+# 2-page-spread scans render to ~100 MP at 350 dpi; disable PIL's ~89 MP
+# DecompressionBomb guard so _fit_payload can open and downscale them. These are
+# the user's own trusted local scans, so the anti-DoS guard is not needed.
+Image.MAX_IMAGE_PIXELS = None
+
 # Middle-dot / bullet family Vision emits for ellipsis, plus the ellipsis char
 # itself. Kept as a class so a run of 2+ collapses but a lone interpunct (e.g.
 # "1·2권") survives. ASCII "..." (3+) is also treated as an ellipsis.
@@ -38,6 +43,12 @@ class VisionOcrEngine:
     ENDPOINT = "https://vision.googleapis.com/v1/images:annotate"
     _RETRY_STATUS = {429, 500, 502, 503, 504}
     _BACKOFF = (1, 2, 4, 8)  # seconds before retries 2..5
+    # Vision images:annotate rejects requests over 40 MiB. base64 inflates bytes
+    # ~4/3, so keep the raw image under ~24 MiB to leave room for that plus the
+    # JSON envelope. Oversized pages (illustration spreads at 350 dpi ~= 100 MP)
+    # are downscaled to fit; normal body pages are far under this and pass
+    # through byte-for-byte (so their OCR matches the pilot reference exactly).
+    _MAX_RAW_BYTES = 24 * 1024 * 1024
 
     def __init__(self, cache_dir, key_path):
         self.cache_dir = cache_dir
@@ -68,16 +79,36 @@ class VisionOcrEngine:
             json.dump({"text": text}, f, ensure_ascii=False)
         os.replace(tmp, cp)  # atomic: cp never left half-written
 
+    def _fit_payload(self, data):
+        """Return image bytes small enough for the Vision request cap. Data under
+        the cap is returned unchanged; oversized data is downscaled (LANCZOS, from
+        the original each pass so quality degrades only once) until it fits."""
+        if len(data) <= self._MAX_RAW_BYTES:
+            return data
+        orig = Image.open(io.BytesIO(data))
+        orig.load()
+        scale = 1.0
+        for _ in range(6):
+            scale *= min((self._MAX_RAW_BYTES / len(data)) ** 0.5, 0.9)
+            w = max(1, int(orig.width * scale))
+            h = max(1, int(orig.height * scale))
+            buf = io.BytesIO()
+            orig.resize((w, h), Image.LANCZOS).save(buf, "PNG")
+            data = buf.getvalue()
+            if len(data) <= self._MAX_RAW_BYTES:
+                break
+        return data
+
     def _image_bytes(self, image_path, preprocess):
         if not preprocess:
             with open(image_path, "rb") as f:
-                return f.read()
+                return self._fit_payload(f.read())
         # low-res scan: reuse the pipeline's LANCZOS upscale + levels cleanup,
         # re-encode to PNG for the API. (Phase-2 gate may swap this method.)
         arr = _preprocess_image(image_path)
         buf = io.BytesIO()
         Image.fromarray(arr).save(buf, "PNG")
-        return buf.getvalue()
+        return self._fit_payload(buf.getvalue())
 
     def _call_vision(self, image_path, preprocess):
         content = base64.b64encode(self._image_bytes(image_path, preprocess)).decode("ascii")
