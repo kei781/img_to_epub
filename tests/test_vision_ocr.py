@@ -160,29 +160,74 @@ def test_make_engine_vision_empty_key_exits(tmp_path):
         make_engine("vision", str(tmp_path), str(tmp_path / ".vision_key"))
 
 
-def test_module_disables_pil_bomb_guard():
-    # 2-page-spread scans render to ~100 MP at 350 dpi; PIL's default guard
-    # (~89 MP) would raise DecompressionBombError when _fit_payload opens them.
-    import ocr2epub.vision_ocr as vo
-    assert vo.Image.MAX_IMAGE_PIXELS is None
-
-
 def test_fit_payload_passthrough_when_small(tmp_path):
     eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
     data = b"x" * 1000
     assert eng._fit_payload(data) is data   # under the cap -> byte-identical, no re-encode
 
 
-def test_fit_payload_downscales_oversized_below_cap(tmp_path, monkeypatch):
+def _noise_png(seed=0, size=400, mode="RGB"):
     import numpy as np
+    ch = 3 if mode == "RGB" else 1
+    shape = (size, size, ch) if mode == "RGB" else (size, size)
+    arr = np.random.RandomState(seed).randint(0, 256, shape, dtype=np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(arr, mode).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_fit_payload_downscales_oversized_below_cap(tmp_path, monkeypatch):
     eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
     monkeypatch.setattr(eng, "_MAX_RAW_BYTES", 3000)   # tiny cap forces a downscale
-    noise = np.random.RandomState(0).randint(0, 256, (400, 400, 3), dtype=np.uint8)
-    buf = io.BytesIO()
-    Image.fromarray(noise, "RGB").save(buf, "PNG")
-    big = buf.getvalue()
+    big = _noise_png()
     assert len(big) > 3000                              # precondition: over the cap
     out = eng._fit_payload(big)
     assert len(out) <= 3000                             # fits the payload budget
     im = Image.open(io.BytesIO(out)); im.load()         # still a valid, smaller image
     assert im.width < 400 and im.height < 400
+
+
+def test_fit_payload_downscales_grayscale(tmp_path, monkeypatch):
+    # the image-zip/rar path feeds an 'L' array (via _preprocess_image); it must
+    # also downscale and stay a valid PNG.
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    monkeypatch.setattr(eng, "_MAX_RAW_BYTES", 3000)
+    out = eng._fit_payload(_noise_png(mode="L"))
+    assert len(out) <= 3000
+    Image.open(io.BytesIO(out)).load()
+
+
+def test_fit_payload_handles_cmyk_input(tmp_path, monkeypatch):
+    # a CMYK JPEG (possible in an image-zip) is not PNG-writable; _fit_payload
+    # must convert rather than raise "cannot write mode CMYK as PNG".
+    import numpy as np
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    monkeypatch.setattr(eng, "_MAX_RAW_BYTES", 3000)
+    rs = np.random.RandomState(1)
+    cmyk = Image.merge("CMYK", [Image.fromarray(rs.randint(0, 256, (400, 400), dtype=np.uint8), "L")
+                                for _ in range(4)])
+    buf = io.BytesIO(); cmyk.save(buf, "JPEG")
+    out = eng._fit_payload(buf.getvalue())
+    assert len(out) <= 3000
+    Image.open(io.BytesIO(out)).load()
+
+
+def test_fit_payload_scopes_and_restores_bomb_guard(tmp_path, monkeypatch):
+    # opening a >2*MAX_IMAGE_PIXELS image would raise DecompressionBombError;
+    # _fit_payload must lift the guard only for its own open and then restore it.
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    monkeypatch.setattr(eng, "_MAX_RAW_BYTES", 3000)
+    big = _noise_png()                                  # 400x400 = 160000 px
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100) # 2x guard = 200 px -> would trip
+    out = eng._fit_payload(big)                         # no DecompressionBombError
+    assert len(out) <= 3000
+    assert Image.MAX_IMAGE_PIXELS == 100                # restored, not leaked as None
+
+
+def test_fit_payload_raises_when_cannot_fit(tmp_path, monkeypatch):
+    # an impossibly small cap can't be met even at 1x1; fail loudly instead of
+    # returning oversized bytes that would produce an opaque downstream HTTP 400.
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    monkeypatch.setattr(eng, "_MAX_RAW_BYTES", 10)
+    with pytest.raises(RuntimeError):
+        eng._fit_payload(_noise_png())

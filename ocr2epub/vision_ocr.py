@@ -12,11 +12,6 @@ from PIL import Image
 
 from .ocr import _preprocess_image
 
-# 2-page-spread scans render to ~100 MP at 350 dpi; disable PIL's ~89 MP
-# DecompressionBomb guard so _fit_payload can open and downscale them. These are
-# the user's own trusted local scans, so the anti-DoS guard is not needed.
-Image.MAX_IMAGE_PIXELS = None
-
 # Middle-dot / bullet family Vision emits for ellipsis, plus the ellipsis char
 # itself. Kept as a class so a run of 2+ collapses but a lone interpunct (e.g.
 # "1·2권") survives. ASCII "..." (3+) is also treated as an ellipsis.
@@ -85,8 +80,19 @@ class VisionOcrEngine:
         the original each pass so quality degrades only once) until it fits."""
         if len(data) <= self._MAX_RAW_BYTES:
             return data
-        orig = Image.open(io.BytesIO(data))
-        orig.load()
+        # Spreads render to ~100 MP; that is under PIL's DecompressionBombError
+        # threshold (2*MAX_IMAGE_PIXELS ~= 179 MP) but over its warning line
+        # (~89 MP). Lift the guard just for our own trusted-scan open (suppresses
+        # the warning, and covers a rare >179 MP page), then restore it.
+        prev_limit = Image.MAX_IMAGE_PIXELS
+        Image.MAX_IMAGE_PIXELS = None
+        try:
+            orig = Image.open(io.BytesIO(data))
+            orig.load()
+        finally:
+            Image.MAX_IMAGE_PIXELS = prev_limit
+        if orig.mode not in ("L", "LA", "P", "RGB", "RGBA"):
+            orig = orig.convert("RGB")  # e.g. a CMYK/YCbCr JPEG is not PNG-writable
         scale = 1.0
         for _ in range(6):
             scale *= min((self._MAX_RAW_BYTES / len(data)) ** 0.5, 0.9)
@@ -96,8 +102,11 @@ class VisionOcrEngine:
             orig.resize((w, h), Image.LANCZOS).save(buf, "PNG")
             data = buf.getvalue()
             if len(data) <= self._MAX_RAW_BYTES:
-                break
-        return data
+                return data
+        raise RuntimeError(
+            f"could not fit image under {self._MAX_RAW_BYTES} bytes after 6 "
+            f"downscales (last {len(data)} bytes)"
+        )
 
     def _image_bytes(self, image_path, preprocess):
         if not preprocess:
