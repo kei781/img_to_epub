@@ -47,6 +47,15 @@ def process_volume(vol, engine, root, dpi=350, maxpages=None):
 
 def make_engine(name, root, key_path):
     if name == "vision":
+        try:
+            key = open(key_path, encoding="utf-8-sig").read().strip() if key_path else ""
+        except OSError:
+            key = ""
+        if not key:
+            raise SystemExit(
+                f"no Vision API key at {key_path!r}. Create {os.path.join(root, '.vision_key')!r}, "
+                f"pass --key <file>, or use --engine easyocr."
+            )
         return VisionOcrEngine(os.path.join(root, "_vision_cache"), key_path)
     if name == "easyocr":
         return OcrEngine(os.path.join(root, "_ocr_cache"))
@@ -65,8 +74,11 @@ def main():
                     help="comma-separated source_types to include, e.g. 'pdf,pdf-zip'")
     ap.add_argument("--engine", default="vision", choices=["vision", "easyocr"])
     ap.add_argument("--key", default=None,
-                    help="Vision API key file (default <root>/.vision_key)")
+                    help="Vision API key file (default <root>/.vision_key); "
+                         "used only with --engine vision")
     a = ap.parse_args()
+    if a.engine == "easyocr" and a.key:
+        print("warning: --key is ignored for --engine easyocr")
     vols = [v for v in discover(a.root) if v.skip_reason is None]
     if a.types:
         allowed = {t.strip() for t in a.types.split(",")}

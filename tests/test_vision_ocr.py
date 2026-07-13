@@ -145,3 +145,16 @@ def test_make_engine_unknown_raises(tmp_path):
     from ocr2epub.run import make_engine
     with pytest.raises(ValueError):
         make_engine("bogus", str(tmp_path), "x")
+
+
+def test_make_engine_vision_missing_key_exits(tmp_path):
+    from ocr2epub.run import make_engine
+    with pytest.raises(SystemExit):
+        make_engine("vision", str(tmp_path), str(tmp_path / ".vision_key"))  # no key file
+
+
+def test_make_engine_vision_empty_key_exits(tmp_path):
+    from ocr2epub.run import make_engine
+    (tmp_path / ".vision_key").write_text("   \n", encoding="utf-8")  # whitespace-only
+    with pytest.raises(SystemExit):
+        make_engine("vision", str(tmp_path), str(tmp_path / ".vision_key"))

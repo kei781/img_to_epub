@@ -4,3 +4,5 @@ __pycache__/
 .superpowers/
 _epub_output/
 _ocr_cache/
+_vision_cache/
+.vision_key
