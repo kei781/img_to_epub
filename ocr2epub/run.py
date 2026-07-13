@@ -7,6 +7,7 @@ import traceback
 from .discover import discover
 from .extract import extract_pages
 from .ocr import OcrEngine
+from .vision_ocr import VisionOcrEngine
 from .postprocess import merge_paragraphs, is_body_text
 from .build_epub import build_epub
 
@@ -44,6 +45,14 @@ def process_volume(vol, engine, root, dpi=350, maxpages=None):
         shutil.rmtree(work, ignore_errors=True)
 
 
+def make_engine(name, root, key_path):
+    if name == "vision":
+        return VisionOcrEngine(os.path.join(root, "_vision_cache"), key_path)
+    if name == "easyocr":
+        return OcrEngine(os.path.join(root, "_ocr_cache"))
+    raise ValueError(f"unknown engine: {name}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
@@ -54,6 +63,9 @@ def main():
                     help="OCR only the first N pages per volume (pilot/sampling)")
     ap.add_argument("--types", default=None,
                     help="comma-separated source_types to include, e.g. 'pdf,pdf-zip'")
+    ap.add_argument("--engine", default="vision", choices=["vision", "easyocr"])
+    ap.add_argument("--key", default=None,
+                    help="Vision API key file (default <root>/.vision_key)")
     a = ap.parse_args()
     vols = [v for v in discover(a.root) if v.skip_reason is None]
     if a.types:
@@ -64,7 +76,8 @@ def main():
     if a.limit is not None:
         vols = vols[:a.limit]
     print(f"processing {len(vols)} volumes")
-    engine = OcrEngine(os.path.join(a.root, "_ocr_cache"))
+    key_path = a.key or os.path.join(a.root, ".vision_key")
+    engine = make_engine(a.engine, a.root, key_path)
     ok = fail = 0
     for v in vols:
         print(f"[{v.source_type}] {v.title}")

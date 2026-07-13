@@ -131,3 +131,17 @@ def test_hard_error_raises_and_is_not_cached(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         eng.page_text(page, "k2")
     assert list(cache.glob("*.json")) == []   # nothing cached on failure
+
+
+def test_make_engine_vision(tmp_path):
+    from ocr2epub.run import make_engine
+    (tmp_path / ".vision_key").write_text("K", encoding="utf-8")
+    eng = make_engine("vision", str(tmp_path), str(tmp_path / ".vision_key"))
+    assert isinstance(eng, VisionOcrEngine)
+    assert eng.cache_dir == os.path.join(str(tmp_path), "_vision_cache")
+
+
+def test_make_engine_unknown_raises(tmp_path):
+    from ocr2epub.run import make_engine
+    with pytest.raises(ValueError):
+        make_engine("bogus", str(tmp_path), "x")
