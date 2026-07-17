@@ -23,9 +23,10 @@ def process_volume(vol, engine, root, dpi=350, maxpages=None):
             # 0 pages -> do NOT write a placeholder epub (it would be treated as
             # done forever). Raise so main() counts it FAIL and it is retried.
             raise RuntimeError(f"no pages extracted for {vol.title}")
-        # low-quality scans (zip/rar) get levels cleanup; PDF renders are already
-        # crisp and are left untouched. "|pp2" tag keeps the two caches distinct.
-        pp = vol.source_type in ("image-zip", "rar")
+        # low-quality scans (zip/rar) get levels cleanup for EasyOCR; PDF renders
+        # are already crisp and are left untouched. Vision reads raw scans cleanly
+        # and opts out via PREPROCESS_SCANS. "|pp2" tag keeps the caches distinct.
+        pp = vol.source_type in ("image-zip", "rar") and getattr(engine, "PREPROCESS_SCANS", True)
         page_paras = []
         dropped = 0
         for pg in pages:

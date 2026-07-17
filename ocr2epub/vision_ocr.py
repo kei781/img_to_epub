@@ -35,6 +35,10 @@ class VisionOcrEngine:
     Vision text (per page) in its own dir; normalization is applied on read so
     changing normalize rules needs only a re-run, not a re-call."""
 
+    # Vision reads raw scans cleanly (pilot: 900px REN is publication-clean, and
+    # LANCZOS upscaling only adds artifacts), so it skips EasyOCR's preprocessing.
+    PREPROCESS_SCANS = False
+
     ENDPOINT = "https://vision.googleapis.com/v1/images:annotate"
     _RETRY_STATUS = {429, 500, 502, 503, 504}
     # google.rpc.Code values worth retrying when Vision reports them as an in-body

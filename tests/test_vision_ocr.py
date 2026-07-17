@@ -198,6 +198,39 @@ def test_make_engine_vision(tmp_path):
     assert eng.cache_dir == os.path.join(str(tmp_path), "_vision_cache")
 
 
+def test_scan_preprocess_follows_engine_flag(tmp_path, monkeypatch):
+    # a scanned archive gets EasyOCR's preprocessing but NOT Vision's (Vision
+    # reads raw scans cleanly). process_volume must honor engine.PREPROCESS_SCANS.
+    import ocr2epub.run as run
+    from ocr2epub.extract import Page
+
+    class V:
+        title = "s"; source_type = "image-zip"; source_paths = ["z"]
+        target_epub = str(tmp_path / "out.epub")
+
+    monkeypatch.setattr(run, "extract_pages", lambda *a, **k: [Page(0, "img.png", None)])
+    monkeypatch.setattr(run, "is_body_text", lambda lines: True)
+    monkeypatch.setattr(run, "merge_paragraphs", lambda lines: "본문")
+    monkeypatch.setattr(run, "build_epub", lambda *a, **k: None)
+
+    seen = {}
+
+    class Eng:
+        PREPROCESS_SCANS = False
+        def page_text(self, pg, key, preprocess=False):
+            seen["pp"] = preprocess
+            return "본문"
+
+    run.process_volume(V(), Eng(), str(tmp_path))
+    assert seen["pp"] is False                     # Vision engine: raw scan
+
+    Eng.PREPROCESS_SCANS = True                     # EasyOCR engine: preprocess
+    if os.path.exists(V.target_epub):
+        os.remove(V.target_epub)
+    run.process_volume(V(), Eng(), str(tmp_path))
+    assert seen["pp"] is True
+
+
 def test_make_engine_unknown_raises(tmp_path):
     from ocr2epub.run import make_engine
     with pytest.raises(ValueError):
