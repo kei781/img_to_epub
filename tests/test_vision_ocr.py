@@ -130,19 +130,40 @@ def test_call_vision_retries_inbody_error_then_succeeds(tmp_path, monkeypatch):
 
 def test_call_vision_persistent_inbody_error_raises(tmp_path, monkeypatch):
     # A genuinely bad image keeps erroring; after exhausting attempts it must
-    # raise (so run.main counts it FAIL and moves on) and stay uncached.
+    # raise (so run.main counts it FAIL and moves on) and stay uncached. The
+    # call-count assertion guards the fix: raise-on-first-error would call once.
     cache = tmp_path / "c"
     eng = VisionOcrEngine(str(cache), _key(tmp_path))
     monkeypatch.setattr("ocr2epub.vision_ocr.time.sleep", lambda s: None)
+    calls = []
 
     def fake_urlopen(req, timeout=0):
+        calls.append(1)
         return _fake_resp({"responses": [{"error": {"code": 3, "message": "Bad image data."}}]})
 
     monkeypatch.setattr("ocr2epub.vision_ocr.urllib.request.urlopen", fake_urlopen)
     page = Page(9, _png(tmp_path), None)
     with pytest.raises(RuntimeError):
         eng.page_text(page, "k9")
-    assert list(cache.glob("*.json")) == []   # nothing cached on failure
+    assert len(calls) == 5                     # retried the full bounded loop
+    assert list(cache.glob("*.json")) == []    # nothing cached on failure
+
+
+def test_call_vision_permanent_inbody_error_fails_fast(tmp_path, monkeypatch):
+    # A permanent in-body code (e.g. 7 PERMISSION_DENIED) must raise on the first
+    # response, not burn the whole backoff loop on every page of a systemic fault.
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    monkeypatch.setattr("ocr2epub.vision_ocr.time.sleep", lambda s: None)
+    calls = []
+
+    def fake_urlopen(req, timeout=0):
+        calls.append(1)
+        return _fake_resp({"responses": [{"error": {"code": 7, "message": "denied"}}]})
+
+    monkeypatch.setattr("ocr2epub.vision_ocr.urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError):
+        eng._call_vision(_png(tmp_path), False)
+    assert len(calls) == 1                      # no retry on a permanent code
 
 
 def test_call_vision_blank_page_returns_empty(tmp_path, monkeypatch):

@@ -37,6 +37,13 @@ class VisionOcrEngine:
 
     ENDPOINT = "https://vision.googleapis.com/v1/images:annotate"
     _RETRY_STATUS = {429, 500, 502, 503, 504}
+    # google.rpc.Code values worth retrying when Vision reports them as an in-body
+    # per-image error: 3=INVALID_ARGUMENT ("Bad image data", empirically transient
+    # on valid pages that succeed on an identical retry), 4=DEADLINE_EXCEEDED,
+    # 8=RESOURCE_EXHAUSTED, 13=INTERNAL, 14=UNAVAILABLE. Permanent codes
+    # (7=PERMISSION_DENIED, 16=UNAUTHENTICATED, ...) raise at once so a systemic
+    # failure surfaces immediately instead of after N backoff sleeps per page.
+    _RETRY_INBODY_CODES = {3, 4, 8, 13, 14}
     _BACKOFF = (1, 2, 4, 8)  # seconds before retries 2..5
     # Vision images:annotate rejects requests over 40 MiB. base64 inflates bytes
     # ~4/3, so keep the raw image under ~24 MiB to leave room for that plus the
@@ -153,11 +160,15 @@ class VisionOcrEngine:
             if "error" in r0:
                 # Vision intermittently returns a transient in-body error (seen:
                 # code 3 "Bad image data." on valid pages that succeed on an
-                # identical retry). Retry within the bounded loop rather than
-                # raising now, which would abort the whole volume for one glitch.
-                # A genuinely bad image keeps erroring and raises after attempts.
-                last_err = "API error: " + json.dumps(r0["error"], ensure_ascii=False)
-                continue
+                # identical retry). Retry the transient codes within the bounded
+                # loop rather than raising now, which would abort the whole volume
+                # for one glitch; a genuinely bad image keeps erroring and raises
+                # after attempts. Permanent codes raise at once (fail fast).
+                detail = json.dumps(r0["error"], ensure_ascii=False)
+                if r0["error"].get("code") in self._RETRY_INBODY_CODES:
+                    last_err = "API error: " + detail
+                    continue
+                raise RuntimeError("Vision API error: " + detail)
             fta = r0.get("fullTextAnnotation")
             return fta["text"] if fta else ""   # "" = genuine blank page
         raise RuntimeError(f"Vision failed after 5 attempts: {last_err}")
