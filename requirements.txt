@@ -1,5 +1,6 @@
 easyocr
 pymupdf
+pypdfium2
 ebooklib
 pillow
 numpy

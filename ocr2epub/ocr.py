@@ -53,6 +53,9 @@ def sort_reading_order(results, line_tol=15):
 
 
 class OcrEngine:
+    # EasyOCR benefits from the levels/upscale cleanup on low-res scans.
+    PREPROCESS_SCANS = True
+
     def __init__(self, cache_dir):
         import easyocr  # lazy: pure funcs above stay importable without GPU stack
 

@@ -4,7 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-IGNORE_DIRS = {"_epub_output", "_ocr_cache", "docs", ".venv", ".git", "ocr2epub"}
+IGNORE_DIRS = {"_epub_output", "_ocr_cache", "_vision_cache", "docs", ".venv", ".git", "ocr2epub"}
 
 
 @dataclass
