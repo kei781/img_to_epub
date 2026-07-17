@@ -1,6 +1,27 @@
 import os
 import zipfile
-from ocr2epub.extract import natural_key, _images_from_zip
+from ocr2epub.extract import natural_key, _images_from_zip, _is_real_text
+
+
+def test_is_real_text_accepts_korean_prose():
+    assert _is_real_text("그날 아침, 벨은 던전으로 향했다. 릴리가 뒤를 따랐다.")
+
+
+def test_is_real_text_accepts_english_prose():
+    assert _is_real_text("It was a bright cold day in April, and the clocks were.")
+
+
+def test_is_real_text_rejects_short_text():
+    # too little to trust as a real text layer -> should render + OCR
+    assert not _is_real_text("Lv.3")
+
+
+def test_is_real_text_rejects_broken_cid_font_garbage():
+    # a page whose embedded font has no CID->Unicode map: get_text returns
+    # hundreds of junk glyph codes that pass a length check but are unreadable.
+    garbage = "\x00\x0f\x00\x04\n\x00\xe2\x00a\x00\xd3\x00$\x00\x04\n\x00\xd4\x00\x04" * 8
+    assert len(garbage) >= 20
+    assert not _is_real_text(garbage)
 
 
 def test_natural_sort_orders_numbers_correctly():

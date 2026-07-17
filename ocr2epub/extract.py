@@ -42,6 +42,24 @@ class Page:
     text: str | None
 
 
+def _is_real_text(txt):
+    """Whether a PDF page's text layer is trustworthy Unicode text (use it as-is)
+    or must be rendered and OCR'd instead. Some scanned volumes embed a font with
+    a broken CID->Unicode map ("unknown cid font type"), so get_text returns
+    hundreds of junk glyph codes (NULs, control chars, random symbols) that pass a
+    length check yet are unreadable. Require BOTH enough length AND a high ratio of
+    real Hangul/ASCII characters; broken-font garbage scores ~0.3, real prose ~1.0.
+    """
+    if len(txt) < 20:
+        return False
+    good = sum(
+        1 for c in txt
+        if ("가" <= c <= "힣")
+        or (c.isascii() and (c.isalnum() or c.isspace() or c in ".,!?\"'()[]-"))
+    )
+    return good / len(txt) >= 0.5
+
+
 def _render_pdf(pdf_path, workdir, dpi, maxpages=None):
     pages = []
     doc = fitz.open(pdf_path)
@@ -52,7 +70,7 @@ def _render_pdf(pdf_path, workdir, dpi, maxpages=None):
         for i in range(n):
             pg = doc[i]
             txt = pg.get_text("text").strip()
-            if len(txt) >= 20:  # 유의미한 텍스트 레이어 존재
+            if _is_real_text(txt):  # 유의미한(디코딩 가능한) 텍스트 레이어 존재
                 pages.append(Page(i, None, txt))
             else:
                 out = os.path.join(workdir, f"p{i:05d}.png")
