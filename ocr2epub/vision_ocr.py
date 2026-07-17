@@ -100,6 +100,8 @@ class VisionOcrEngine:
         # PIL's error threshold (2*MAX_IMAGE_PIXELS ~= 179 MP). Restore the guard in
         # finally so it never leaks into the easyocr path. Opening reads the size
         # from the header without decoding pixels, so the pixel check is cheap.
+        # (MAX_IMAGE_PIXELS is process-global; safe only because OCR runs one page
+        # at a time. A future threaded loop would need a lock around this.)
         prev_limit = Image.MAX_IMAGE_PIXELS
         Image.MAX_IMAGE_PIXELS = None
         try:

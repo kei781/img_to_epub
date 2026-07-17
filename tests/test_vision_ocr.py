@@ -259,6 +259,20 @@ def test_fit_payload_downscales_over_pixel_cap_within_bytes(tmp_path, monkeypatc
     assert (im.width, im.height) != (400, 400)          # actually downscaled
 
 
+def test_fit_payload_downscales_over_both_caps(tmp_path, monkeypatch):
+    # Over BOTH caps: the pixel cap is met first, then further byte passes shrink
+    # it under the byte budget. Noise is near-incompressible, so one pixel pass
+    # leaves it over the tiny byte cap and forces >=1 more pass.
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    monkeypatch.setattr(eng, "_MAX_PIXELS", 100_000)
+    monkeypatch.setattr(eng, "_MAX_RAW_BYTES", 20_000)
+    big = _noise_png(size=600)                          # 360k px, well over both caps
+    out = eng._fit_payload(big)
+    assert len(out) <= 20_000                           # meets byte cap
+    im = Image.open(io.BytesIO(out)); im.load()
+    assert im.width * im.height <= 100_000              # meets pixel cap
+
+
 def test_fit_payload_downscales_grayscale(tmp_path, monkeypatch):
     # the image-zip/rar path feeds an 'L' array (via _preprocess_image); it must
     # also downscale and stay a valid PNG.
