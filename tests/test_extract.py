@@ -7,8 +7,9 @@ def test_is_real_text_accepts_korean_prose():
     assert _is_real_text("그날 아침, 벨은 던전으로 향했다. 릴리가 뒤를 따랐다.")
 
 
-def test_is_real_text_accepts_english_prose():
-    assert _is_real_text("It was a bright cold day in April, and the clocks were.")
+def test_is_real_text_accepts_korean_with_english_and_numbers():
+    # real body pages mix Hangul with Latin names and numbers -> still trusted
+    assert _is_real_text("아야노코지 군은 Lv.3 시험에서 87점을 받았다고 말했다.")
 
 
 def test_is_real_text_rejects_short_text():
@@ -22,6 +23,14 @@ def test_is_real_text_rejects_broken_cid_font_garbage():
     garbage = "\x00\x0f\x00\x04\n\x00\xe2\x00a\x00\xd3\x00$\x00\x04\n\x00\xd4\x00\x04" * 8
     assert len(garbage) >= 20
     assert not _is_real_text(garbage)
+
+
+def test_is_real_text_rejects_latin_only_page():
+    # a broken font that maps CIDs into printable ASCII would score high on a
+    # char-cleanliness check alone; in a Korean corpus a page with no Hangul is
+    # not a trustworthy native text layer and must be rendered + OCR'd instead.
+    latin_dump = "It was a bright cold day in April and the clocks were striking."
+    assert not _is_real_text(latin_dump)
 
 
 def test_natural_sort_orders_numbers_correctly():

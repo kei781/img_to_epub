@@ -52,12 +52,18 @@ def _is_real_text(txt):
     """
     if len(txt) < 20:
         return False
-    good = sum(
+    hangul = sum(1 for c in txt if "가" <= c <= "힣")
+    good = hangul + sum(
         1 for c in txt
-        if ("가" <= c <= "힣")
-        or (c.isascii() and (c.isalnum() or c.isspace() or c in ".,!?\"'()[]-"))
+        if c.isascii() and (c.isalnum() or c.isspace() or c in ".,!?\"'()[]-")
     )
-    return good / len(txt) >= 0.5
+    # Two failure modes must both be caught, since this is a Korean corpus:
+    #  - non-ASCII junk (NUL/control/symbols) -> low `good` ratio;
+    #  - a broken font that dumps Latin glyphs -> high `good` ratio but no Hangul.
+    # A real body page is Korean prose, so require both a clean character mix AND
+    # a real Hangul presence. Latin-only pages (broken-font garbage, or the rare
+    # genuine English credits page) fall through to render + OCR, which is safe.
+    return good / len(txt) >= 0.5 and hangul / len(txt) >= 0.1
 
 
 def _render_pdf(pdf_path, workdir, dpi, maxpages=None):
