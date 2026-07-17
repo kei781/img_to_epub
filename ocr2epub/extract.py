@@ -63,6 +63,7 @@ def _is_real_text(txt):
 def _render_pdf(pdf_path, workdir, dpi, maxpages=None):
     pages = []
     doc = fitz.open(pdf_path)
+    pdfium_doc = None  # opened lazily only if a broken-font page needs it
     try:
         n = len(doc)
         if maxpages is not None:
@@ -72,12 +73,27 @@ def _render_pdf(pdf_path, workdir, dpi, maxpages=None):
             txt = pg.get_text("text").strip()
             if _is_real_text(txt):  # 유의미한(디코딩 가능한) 텍스트 레이어 존재
                 pages.append(Page(i, None, txt))
+                continue
+            out = os.path.join(workdir, f"p{i:05d}.png")
+            if len(txt) >= 20:
+                # A text layer exists but decodes to garbage: the page uses an
+                # embedded font MuPDF can't map ("unknown cid font type"), and
+                # MuPDF would ALSO render the wrong glyphs. PDFium maps the
+                # Identity-H CIDs straight to the embedded outlines and renders
+                # the real page, so OCR sees the actual text.
+                if pdfium_doc is None:
+                    import pypdfium2 as pdfium
+                    pdfium_doc = pdfium.PdfDocument(pdf_path)
+                pdfium_doc[i].render(scale=dpi / 72).to_pil().save(out)
             else:
-                out = os.path.join(workdir, f"p{i:05d}.png")
+                # No usable text layer at all = a true scan/raster page; MuPDF
+                # renders these fine (matches the pilot-validated OCR path).
                 pg.get_pixmap(dpi=dpi).save(out)
-                pages.append(Page(i, out, None))
+            pages.append(Page(i, out, None))
     finally:
         doc.close()
+        if pdfium_doc is not None:
+            pdfium_doc.close()
     return pages
 
 
