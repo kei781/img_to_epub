@@ -219,8 +219,8 @@ def test_make_engine_vision_empty_key_exits(tmp_path):
 
 def test_fit_payload_passthrough_when_small(tmp_path):
     eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
-    data = b"x" * 1000
-    assert eng._fit_payload(data) is data   # under the cap -> byte-identical, no re-encode
+    data = _noise_png(size=50)              # a real, tiny PNG under both caps
+    assert eng._fit_payload(data) is data   # within limits -> byte-identical, no re-encode
 
 
 def _noise_png(seed=0, size=400, mode="RGB"):
@@ -242,6 +242,21 @@ def test_fit_payload_downscales_oversized_below_cap(tmp_path, monkeypatch):
     assert len(out) <= 3000                             # fits the payload budget
     im = Image.open(io.BytesIO(out)); im.load()         # still a valid, smaller image
     assert im.width < 400 and im.height < 400
+
+
+def test_fit_payload_downscales_over_pixel_cap_within_bytes(tmp_path, monkeypatch):
+    # THE 던만추/실지주 batch bug: a page can be small in BYTES yet over Vision's
+    # 75 MP pixel limit (a 2-page spread), which Vision rejects as "Bad image
+    # data". _fit_payload must downscale it below the pixel cap even though the
+    # byte cap alone would pass it through unchanged.
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    monkeypatch.setattr(eng, "_MAX_PIXELS", 40_000)     # 400x400 = 160k px > cap
+    big = _noise_png()                                  # 400x400, well under byte cap
+    assert len(big) <= eng._MAX_RAW_BYTES               # bytes are NOT the trigger
+    out = eng._fit_payload(big)
+    im = Image.open(io.BytesIO(out)); im.load()
+    assert im.width * im.height <= 40_000               # now within the pixel cap
+    assert (im.width, im.height) != (400, 400)          # actually downscaled
 
 
 def test_fit_payload_downscales_grayscale(tmp_path, monkeypatch):

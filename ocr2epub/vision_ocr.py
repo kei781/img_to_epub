@@ -51,6 +51,13 @@ class VisionOcrEngine:
     # are downscaled to fit; normal body pages are far under this and pass
     # through byte-for-byte (so their OCR matches the pilot reference exactly).
     _MAX_RAW_BYTES = 24 * 1024 * 1024
+    # Vision rejects OCR images over 75,000,000 pixels with an in-body
+    # {"code":3,"message":"Bad image data."} error, INDEPENDENT of byte size
+    # (verified empirically: 76 MP fails, 75 MP passes). A 2-page spread can be
+    # small in bytes yet ~200 MP, so it must be capped by pixels too. Small margin
+    # under the hard limit for boundary safety; the only pages this touches are
+    # illustration spreads that is_body_text drops anyway, so resolution is moot.
+    _MAX_PIXELS = 74_000_000
 
     def __init__(self, cache_dir, key_path):
         self.cache_dir = cache_dir
@@ -82,38 +89,46 @@ class VisionOcrEngine:
         os.replace(tmp, cp)  # atomic: cp never left half-written
 
     def _fit_payload(self, data):
-        """Return image bytes small enough for the Vision request cap. Data under
-        the cap is returned unchanged; oversized data is downscaled (LANCZOS, from
-        the original each pass so quality degrades only once) until it fits."""
-        if len(data) <= self._MAX_RAW_BYTES:
-            return data
-        # Spreads render to ~100 MP; that is under PIL's DecompressionBombError
-        # threshold (2*MAX_IMAGE_PIXELS ~= 179 MP) but over its warning line
-        # (~89 MP). Lift the guard just for our own trusted-scan open (suppresses
-        # the warning, and covers a rare >179 MP page), then restore it.
+        """Return image bytes within Vision's request limits: at most _MAX_RAW_BYTES
+        AND at most _MAX_PIXELS. Vision rejects OCR images over the pixel limit with
+        a "Bad image data" error regardless of byte size, so a page that is small in
+        bytes but huge in pixels (a 2-page spread) must still be downscaled. Data
+        within both limits is returned unchanged (byte-identical -> matches the pilot
+        reference); oversized data is downscaled (LANCZOS, from the original each
+        pass so quality degrades only once) until it fits both."""
+        # Open under a lifted DecompressionBomb guard: spreads reach ~200 MP, over
+        # PIL's error threshold (2*MAX_IMAGE_PIXELS ~= 179 MP). Restore the guard in
+        # finally so it never leaks into the easyocr path. Opening reads the size
+        # from the header without decoding pixels, so the pixel check is cheap.
         prev_limit = Image.MAX_IMAGE_PIXELS
         Image.MAX_IMAGE_PIXELS = None
         try:
             orig = Image.open(io.BytesIO(data))
+            w, h = orig.size
+            if len(data) <= self._MAX_RAW_BYTES and w * h <= self._MAX_PIXELS:
+                return data
             orig.load()
+            if orig.mode not in ("L", "LA", "P", "RGB", "RGBA"):
+                orig = orig.convert("RGB")  # a CMYK/YCbCr JPEG is not PNG-writable
+            # Meet the pixel cap first (deterministic from dimensions), then iterate
+            # for the byte cap (PNG size is not a closed form of dimensions).
+            scale = min(1.0, (self._MAX_PIXELS / (w * h)) ** 0.5)
+            for _ in range(6):
+                ww = max(1, int(w * scale))
+                hh = max(1, int(h * scale))
+                buf = io.BytesIO()
+                orig.resize((ww, hh), Image.LANCZOS).save(buf, "PNG")
+                out = buf.getvalue()
+                if len(out) <= self._MAX_RAW_BYTES and ww * hh <= self._MAX_PIXELS:
+                    return out
+                scale *= min((self._MAX_RAW_BYTES / len(out)) ** 0.5, 0.9)
+            raise RuntimeError(
+                f"could not fit image under {self._MAX_RAW_BYTES} bytes / "
+                f"{self._MAX_PIXELS} px after 6 downscales "
+                f"(last {len(out)} bytes, {ww * hh} px)"
+            )
         finally:
             Image.MAX_IMAGE_PIXELS = prev_limit
-        if orig.mode not in ("L", "LA", "P", "RGB", "RGBA"):
-            orig = orig.convert("RGB")  # e.g. a CMYK/YCbCr JPEG is not PNG-writable
-        scale = 1.0
-        for _ in range(6):
-            scale *= min((self._MAX_RAW_BYTES / len(data)) ** 0.5, 0.9)
-            w = max(1, int(orig.width * scale))
-            h = max(1, int(orig.height * scale))
-            buf = io.BytesIO()
-            orig.resize((w, h), Image.LANCZOS).save(buf, "PNG")
-            data = buf.getvalue()
-            if len(data) <= self._MAX_RAW_BYTES:
-                return data
-        raise RuntimeError(
-            f"could not fit image under {self._MAX_RAW_BYTES} bytes after 6 "
-            f"downscales (last {len(data)} bytes)"
-        )
 
     def _image_bytes(self, image_path, preprocess):
         if not preprocess:
