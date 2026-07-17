@@ -151,9 +151,13 @@ class VisionOcrEngine:
                 continue
             r0 = resp["responses"][0]
             if "error" in r0:
-                raise RuntimeError(
-                    "Vision API error: " + json.dumps(r0["error"], ensure_ascii=False)
-                )
+                # Vision intermittently returns a transient in-body error (seen:
+                # code 3 "Bad image data." on valid pages that succeed on an
+                # identical retry). Retry within the bounded loop rather than
+                # raising now, which would abort the whole volume for one glitch.
+                # A genuinely bad image keeps erroring and raises after attempts.
+                last_err = "API error: " + json.dumps(r0["error"], ensure_ascii=False)
+                continue
             fta = r0.get("fullTextAnnotation")
             return fta["text"] if fta else ""   # "" = genuine blank page
         raise RuntimeError(f"Vision failed after 5 attempts: {last_err}")

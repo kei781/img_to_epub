@@ -109,6 +109,42 @@ def test_call_vision_retries_transient_then_succeeds(tmp_path, monkeypatch):
     assert eng._call_vision(_png(tmp_path), False) == "OK본문"
 
 
+def test_call_vision_retries_inbody_error_then_succeeds(tmp_path, monkeypatch):
+    # Vision intermittently returns a transient in-body error (observed: code 3
+    # "Bad image data" on valid pages that succeed on an identical retry). It must
+    # be retried within the bounded loop, not raised immediately (which would
+    # abort the whole volume for one glitch).
+    eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
+    monkeypatch.setattr("ocr2epub.vision_ocr.time.sleep", lambda s: None)
+    seq = [
+        _fake_resp({"responses": [{"error": {"code": 3, "message": "Bad image data."}}]}),
+        _fake_resp({"responses": [{"fullTextAnnotation": {"text": "복구된본문"}}]}),
+    ]
+
+    def fake_urlopen(req, timeout=0):
+        return seq.pop(0)
+
+    monkeypatch.setattr("ocr2epub.vision_ocr.urllib.request.urlopen", fake_urlopen)
+    assert eng._call_vision(_png(tmp_path), False) == "복구된본문"
+
+
+def test_call_vision_persistent_inbody_error_raises(tmp_path, monkeypatch):
+    # A genuinely bad image keeps erroring; after exhausting attempts it must
+    # raise (so run.main counts it FAIL and moves on) and stay uncached.
+    cache = tmp_path / "c"
+    eng = VisionOcrEngine(str(cache), _key(tmp_path))
+    monkeypatch.setattr("ocr2epub.vision_ocr.time.sleep", lambda s: None)
+
+    def fake_urlopen(req, timeout=0):
+        return _fake_resp({"responses": [{"error": {"code": 3, "message": "Bad image data."}}]})
+
+    monkeypatch.setattr("ocr2epub.vision_ocr.urllib.request.urlopen", fake_urlopen)
+    page = Page(9, _png(tmp_path), None)
+    with pytest.raises(RuntimeError):
+        eng.page_text(page, "k9")
+    assert list(cache.glob("*.json")) == []   # nothing cached on failure
+
+
 def test_call_vision_blank_page_returns_empty(tmp_path, monkeypatch):
     eng = VisionOcrEngine(str(tmp_path / "c"), _key(tmp_path))
 
